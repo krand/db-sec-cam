@@ -6,9 +6,8 @@ button { cursor: pointer; }
 .app-shell { min-height: 100vh; max-width: 1600px; margin: 0 auto; padding: 0 42px 22px; }
 .topbar { height: 82px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #e6eaf0; margin-bottom: 30px; }
 .brand-lockup { display: flex; gap: 12px; align-items: center; }
-.brand-mark { height: 37px; width: 37px; border-radius: 11px; background: #274c77; display: grid; place-items: center; box-shadow: 0 4px 10px #274c7728; }
-.brand-mark span { height: 17px; width: 22px; border: 2px solid white; border-radius: 5px; position: relative; }
-.brand-mark span:before { content: ''; position: absolute; width: 7px; height: 7px; border: 2px solid white; border-radius: 50%; top: 3px; left: 5px; }
+.brand-mark { height: 37px; width: 37px; flex: 0 0 auto; filter: drop-shadow(0 4px 10px #274c7728); }
+.brand-mark svg { display: block; width: 100%; height: 100%; }
 .brand-name { font: 700 16px 'Manrope', sans-serif; letter-spacing: -.35px; }
 .brand-caption { color: #8893a3; font-size: 9px; letter-spacing: 1.3px; font-weight: 700; margin-top: 2px; }
 .status-pill { border: 1px solid #e0e5ec; background: white; border-radius: 30px; padding: 8px 12px; color: #707c8c; font-size: 11px; font-weight: 600; display: inline-flex; align-items: center; gap: 7px; }

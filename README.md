@@ -28,6 +28,8 @@ Telegram notifications use a bot chat to send alerts to your personal Telegram a
 
 Motion monitoring runs only while the app is open and its camera preview is active. It compares downscaled grayscale frames locally; it does not use AI or save comparison images. When the configured portion of the image changes, the app captures a JPEG snapshot (up to 1280 pixels on the longest side) and sends it with the alert. The snapshot is not saved on the Mac, but Telegram receives and retains it in the bot chat. An internet connection and Telegram availability are required for delivery. Use **Disconnect** to remove the saved bot token and connection.
 
+While Camera Recorder is open and Telegram is connected, send `/photo` in the private bot chat to get a current picture. The camera preview must be running. The bot accepts commands only from the private chat connected in Camera Recorder; `/snapshot` is also supported.
+
 ## Development
 
 ```sh
@@ -42,3 +44,5 @@ npm run package:mac
 ```
 
 The app requests camera permission only when the user starts the camera. It does not request microphone access or record audio.
+
+This command creates a macOS DMG installer in `release/`.

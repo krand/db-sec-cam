@@ -56,6 +56,17 @@ function App() {
   useEffect(() => { settingsRef.current = settings }, [settings])
   useEffect(() => { streamRef.current = stream }, [stream])
 
+  useEffect(() => window.cameraRecorder.onTelegramPhotoRequest((requestId) => {
+    const video = videoRef.current
+    if (!streamRef.current || !video || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+      window.cameraRecorder.submitTelegramPhoto(requestId)
+      return
+    }
+    void captureMotionPhoto(video)
+      .then((photo) => window.cameraRecorder.submitTelegramPhoto(requestId, photo ?? undefined))
+      .catch(() => window.cameraRecorder.submitTelegramPhoto(requestId))
+  }), [])
+
   useEffect(() => {
     void window.cameraRecorder.getSettings().then(async (loaded) => {
       setSettings(loaded)
@@ -462,7 +473,21 @@ function App() {
     <main className="app-shell">
       <header className="topbar">
         <div className="brand-lockup">
-          <div className="brand-mark"><span /></div>
+          <div className="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 1024 1024" focusable="false">
+              <defs>
+                <linearGradient id="brand-eye-bg" x1="0" y1="0" x2="1" y2="1"><stop stopColor="#446f9b" /><stop offset="1" stopColor="#173655" /></linearGradient>
+                <radialGradient id="brand-eye-iris"><stop stopColor="#9ac4dc" /><stop offset=".55" stopColor="#4c7fa8" /><stop offset="1" stopColor="#234c74" /></radialGradient>
+              </defs>
+              <rect width="1024" height="1024" rx="224" fill="url(#brand-eye-bg)" />
+              <path d="M167 512c92-154 207-231 345-231s253 77 345 231c-92 154-207 231-345 231S259 666 167 512Z" fill="#f6f9fc" />
+              <circle cx="512" cy="512" r="173" fill="#1d4266" />
+              <circle cx="512" cy="512" r="139" fill="url(#brand-eye-iris)" />
+              <circle cx="512" cy="512" r="80" fill="#142f4a" />
+              <circle cx="461" cy="458" r="30" fill="#e8f5fc" opacity=".86" />
+              <circle cx="747" cy="353" r="32" fill="#e85c6b" />
+            </svg>
+          </div>
           <div><div className="brand-name">Camera Recorder</div><div className="brand-caption">LOCAL VIDEO CAPTURE</div></div>
         </div>
         <div className={`status-pill ${recording ? 'is-recording' : cameraState === 'ready' ? 'is-ready' : ''}`}>
@@ -578,7 +603,7 @@ function App() {
             {telegramStatus && <div className="telegram-message">{telegramStatus}</div>}
           </div>
 
-          <div className="privacy-note"><span className="privacy-lock">◇</span><span><strong>Private by default</strong><small>Video stays local unless its folder syncs online. If enabled, motion alerts send text to your Telegram bot.</small></span></div>
+          <div className="privacy-note"><span className="privacy-lock">◇</span><span><strong>Private by default</strong><small>Video stays local unless its folder syncs online. Telegram receives motion alerts and pictures you request with /photo.</small></span></div>
         </aside>
       </div>
 

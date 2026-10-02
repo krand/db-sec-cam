@@ -11,6 +11,12 @@ const cameraRecorder = {
   completeTelegramConnect: () => ipcRenderer.invoke('telegram:complete-connect') as Promise<{ connected: true; chatId: string } | { connected: false }>,
   testTelegram: () => ipcRenderer.invoke('telegram:test') as Promise<boolean>,
   sendMotionAlert: (imageData?: ArrayBuffer) => ipcRenderer.invoke('telegram:send-motion-alert', imageData) as Promise<boolean>,
+  onTelegramPhotoRequest: (callback: (requestId: string) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, requestId: string) => callback(requestId)
+    ipcRenderer.on('telegram:photo-request', listener)
+    return () => ipcRenderer.removeListener('telegram:photo-request', listener)
+  },
+  submitTelegramPhoto: (requestId: string, imageData?: ArrayBuffer) => ipcRenderer.send('telegram:photo-result', requestId, imageData),
   disconnectTelegram: () => ipcRenderer.invoke('telegram:disconnect') as Promise<boolean>,
   chooseFolder: (currentPath: string) => ipcRenderer.invoke('folder:choose', currentPath) as Promise<string | null>,
   saveSegment: (fileName: string, data: ArrayBuffer) => ipcRenderer.invoke('recording:save-segment', { fileName, data }) as Promise<SavedSegmentResult>,

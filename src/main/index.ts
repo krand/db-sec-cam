@@ -14,8 +14,14 @@ let storageQueue: Promise<void> = Promise.resolve()
 let activeTelegramChallenge: { value: string; expiresAt: number } | null = null
 
 interface TelegramUpdate {
+  update_id: number
   message?: { text?: string; chat?: { id: number; type: string } }
 }
+
+const pendingTelegramPhotos = new Map<string, (imageData?: ArrayBuffer) => void>()
+let telegramPolling = false
+let telegramPollGeneration = 0
+let telegramUpdateOffset = 0
 
 function defaultSettings(): RecorderSettings {
   return { ...DEFAULT_SETTINGS, outputDirectory: path.join(app.getPath('videos'), 'Camera Recorder') }
@@ -96,12 +102,12 @@ async function loadTelegramToken(): Promise<string> {
   return safeStorage.decryptString(encrypted)
 }
 
-async function telegramRequest<T>(token: string, method: string, payload?: Record<string, unknown>): Promise<T> {
+async function telegramRequest<T>(token: string, method: string, payload?: Record<string, unknown>, timeoutMs = 12_000): Promise<T> {
   const response = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(payload ?? {}),
-    signal: AbortSignal.timeout(12_000),
+    signal: AbortSignal.timeout(timeoutMs),
   })
   const result = await response.json() as { ok?: boolean; result?: T; description?: string }
   if (!response.ok || result.ok !== true) throw new Error(result.description || `Telegram request failed (${response.status}).`)
@@ -115,10 +121,10 @@ async function sendTelegramText(chatId: string, text: string) {
 
 async function sendTelegramPhoto(chatId: string, text: string, imageData: ArrayBuffer) {
   if (imageData.byteLength === 0 || imageData.byteLength > 10 * 1024 * 1024) {
-    throw new Error('The motion photo must be smaller than 10 MB.')
+    throw new Error('The photo must be smaller than 10 MB.')
   }
   const bytes = new Uint8Array(imageData)
-  if (bytes[0] !== 0xff || bytes[1] !== 0xd8) throw new Error('The motion snapshot is not a JPEG image.')
+  if (bytes[0] !== 0xff || bytes[1] !== 0xd8) throw new Error('The snapshot is not a JPEG image.')
   const token = await loadTelegramToken()
   const form = new FormData()
   form.set('chat_id', chatId)
@@ -131,6 +137,83 @@ async function sendTelegramPhoto(chatId: string, text: string, imageData: ArrayB
   })
   const result = await response.json() as { ok?: boolean; description?: string }
   if (!response.ok || result.ok !== true) throw new Error(result.description || `Telegram photo upload failed (${response.status}).`)
+}
+
+function requestCameraSnapshot(): Promise<ArrayBuffer | null> {
+  if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return Promise.resolve(null)
+  const requestId = randomBytes(12).toString('hex')
+  return new Promise((resolve) => {
+    const timeout = setTimeout(() => {
+      pendingTelegramPhotos.delete(requestId)
+      resolve(null)
+    }, 8_000)
+    pendingTelegramPhotos.set(requestId, (imageData) => {
+      clearTimeout(timeout)
+      pendingTelegramPhotos.delete(requestId)
+      resolve(imageData ?? null)
+    })
+    mainWindow!.webContents.send('telegram:photo-request', requestId)
+  })
+}
+
+async function handleTelegramCommand(update: TelegramUpdate) {
+  const message = update.message
+  const settings = await readSettings()
+  if (!message?.chat || message.chat.type !== 'private' || String(message.chat.id) !== settings.telegramChatId) return
+  const command = message.text?.trim() ?? ''
+  if (/^\/(photo|snapshot)(?:@[a-z0-9_]+)?(?:\s|$)/i.test(command)) {
+    const imageData = await requestCameraSnapshot()
+    if (!imageData) {
+      await sendTelegramText(settings.telegramChatId, 'Camera is not running or the snapshot is unavailable. Start the camera in Camera Recorder and try again.')
+      return
+    }
+    await sendTelegramPhoto(settings.telegramChatId, `Current camera picture · ${new Date().toLocaleString()}`, imageData)
+    return
+  }
+  if (/^\/start(?:@[a-z0-9_]+)?(?:\s|$)/i.test(command)) {
+    await sendTelegramText(settings.telegramChatId, 'Send /photo to receive a current picture from Camera Recorder. The app and camera must be running.')
+  }
+}
+
+function startTelegramPolling() {
+  if (telegramPolling) return
+  telegramPolling = true
+  const generation = ++telegramPollGeneration
+  void (async () => {
+    while (telegramPolling && generation === telegramPollGeneration) {
+      try {
+        const settings = await readSettings()
+        if (!settings.telegramChatId) break
+        const token = await loadTelegramToken()
+        const updates = await telegramRequest<TelegramUpdate[]>(token, 'getUpdates', {
+          offset: telegramUpdateOffset,
+          timeout: 20,
+          allowed_updates: ['message'],
+        }, 25_000)
+        for (const update of updates) {
+          telegramUpdateOffset = Math.max(telegramUpdateOffset, update.update_id + 1)
+          try {
+            await handleTelegramCommand(update)
+          } catch (error) {
+            const latest = await readSettings()
+            if (latest.telegramChatId && update.message?.chat?.type === 'private'
+              && String(update.message.chat.id) === latest.telegramChatId) {
+              const detail = error instanceof Error ? error.message : 'Telegram request failed.'
+              await sendTelegramText(latest.telegramChatId, `Could not send the camera picture: ${detail}`).catch(() => undefined)
+            }
+          }
+        }
+      } catch {
+        await new Promise((resolve) => setTimeout(resolve, 3_000))
+      }
+    }
+    if (generation === telegramPollGeneration) telegramPolling = false
+  })()
+}
+
+function stopTelegramPolling() {
+  telegramPolling = false
+  telegramPollGeneration += 1
 }
 
 function updatePowerBlocker(): boolean {
@@ -211,6 +294,10 @@ function createWindow() {
 }
 
 function registerIpc() {
+  ipcMain.on('telegram:photo-result', (event, requestId: unknown, imageData?: unknown) => {
+    if (event.sender !== mainWindow?.webContents || typeof requestId !== 'string') return
+    pendingTelegramPhotos.get(requestId)?.(imageData instanceof ArrayBuffer ? imageData : undefined)
+  })
   ipcMain.handle('settings:get', () => readSettings())
   ipcMain.handle('settings:save', (_event, settings: RecorderSettings) => withStorageLock(() => persistSettings(settings)))
   ipcMain.handle('storage:status', () => withStorageLock(async () => enforceStorageLimit(await readSettings())))
@@ -220,6 +307,7 @@ function registerIpc() {
     if (token.length < 20 || token.length > 512) throw new Error('Enter a valid bot token from @BotFather.')
     const bot = await telegramRequest<{ username: string }>(token, 'getMe')
     if (!bot.username) throw new Error('Telegram did not return a bot username.')
+    stopTelegramPolling()
     await storeTelegramToken(token)
     await withStorageLock(async () => {
       const current = await readSettings()
@@ -249,12 +337,14 @@ function registerIpc() {
     }
     const token = await loadTelegramToken()
     const updates = await telegramRequest<TelegramUpdate[]>(token, 'getUpdates', { timeout: 0, allowed_updates: ['message'] })
+    for (const update of updates) telegramUpdateOffset = Math.max(telegramUpdateOffset, update.update_id + 1)
     const match = [...updates].reverse().find((update) => update.message?.chat?.type === 'private' && update.message.text?.trim() === `/start ${challenge.value}`)
     const chatId = match?.message?.chat?.id
     if (chatId === undefined) return { connected: false as const }
     const id = String(chatId)
     activeTelegramChallenge = null
     await withStorageLock(async () => persistSettings({ ...await readSettings(), telegramChatId: id }))
+    startTelegramPolling()
     return { connected: true as const, chatId: id }
   })
   ipcMain.handle('telegram:test', async () => {
@@ -274,6 +364,7 @@ function registerIpc() {
     return true
   })
   ipcMain.handle('telegram:disconnect', async () => {
+    stopTelegramPolling()
     await unlink(telegramTokenPath()).catch((error: NodeJS.ErrnoException) => {
       if (error.code !== 'ENOENT') throw error
     })
@@ -332,10 +423,14 @@ app.whenReady().then(() => {
   })
   registerIpc()
   createWindow()
+  void readSettings().then((settings) => {
+    if (settings.telegramChatId) startTelegramPolling()
+  })
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow() })
 })
 
 app.on('before-quit', () => {
+  stopTelegramPolling()
   powerRequests.clear()
   if (powerBlockerId !== null) powerSaveBlocker.stop(powerBlockerId)
   powerBlockerId = null

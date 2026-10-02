@@ -8,7 +8,7 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
-    "package:mac": "npm run build && electron-builder --mac"
+    "package:mac": "npm run build && electron-builder --mac dmg"
   },
   "dependencies": {
     "react": "^19.1.1",
@@ -36,11 +36,9 @@
       "package.json"
     ],
     "mac": {
+      "icon": "build/icon.icns",
       "category": "public.app-category.video",
-      "target": [
-        "dmg",
-        "zip"
-      ],
+      "target": ["dmg"],
       "extendInfo": {
         "NSCameraUsageDescription": "Camera Recorder uses the camera to show a live preview and save video clips when you start recording."
       }
