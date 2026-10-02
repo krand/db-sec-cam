@@ -363,7 +363,13 @@ function registerIpc() {
     activeTelegramPairingUrl = null
     await withStorageLock(async () => persistSettings({ ...await readSettings(), telegramChatId: id }))
     startTelegramPolling()
-    return { connected: true as const, chatId: id }
+    let welcomeSent = true
+    try {
+      await sendTelegramText(id, 'Camera Recorder is connected. Send /photo to receive a current picture. The camera must be running.')
+    } catch {
+      welcomeSent = false
+    }
+    return { connected: true as const, chatId: id, welcomeSent }
   })
   ipcMain.handle('telegram:test', async () => {
     const settings = await readSettings()

@@ -9,7 +9,7 @@ const cameraRecorder = {
   saveTelegramToken: (token: string) => ipcRenderer.invoke('telegram:save-token', token) as Promise<{ username: string }>,
   beginTelegramConnect: () => ipcRenderer.invoke('telegram:begin-connect') as Promise<{ username: string; url: string }>,
   openTelegramPairingLink: (url: string) => ipcRenderer.invoke('telegram:open-pairing-link', url) as Promise<boolean>,
-  completeTelegramConnect: () => ipcRenderer.invoke('telegram:complete-connect') as Promise<{ connected: true; chatId: string } | { connected: false }>,
+  completeTelegramConnect: () => ipcRenderer.invoke('telegram:complete-connect') as Promise<{ connected: true; chatId: string; welcomeSent: boolean } | { connected: false }>,
   testTelegram: () => ipcRenderer.invoke('telegram:test') as Promise<boolean>,
   sendMotionAlert: (imageData?: ArrayBuffer) => ipcRenderer.invoke('telegram:send-motion-alert', imageData) as Promise<boolean>,
   onTelegramPhotoRequest: (callback: (requestId: string) => void) => {

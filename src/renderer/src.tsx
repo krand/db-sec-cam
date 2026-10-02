@@ -471,7 +471,9 @@ function App() {
       setTelegramPairingLink('')
       setTelegramLinkCopied(false)
       setTelegramPairingDialogOpen(false)
-      setTelegramStatus(`Connected to @${settingsRef.current?.telegramBotUsername ?? 'your bot'}.`)
+      setTelegramStatus(result.welcomeSent
+        ? `Connected to @${settingsRef.current?.telegramBotUsername ?? 'your bot'}. Check Telegram for the /photo instructions.`
+        : `Connected to @${settingsRef.current?.telegramBotUsername ?? 'your bot'}, but the welcome message could not be sent.`)
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Could not connect Telegram.'
       setTelegramStatus(message)
