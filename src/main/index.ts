@@ -113,6 +113,26 @@ async function sendTelegramText(chatId: string, text: string) {
   await telegramRequest(token, 'sendMessage', { chat_id: chatId, text })
 }
 
+async function sendTelegramPhoto(chatId: string, text: string, imageData: ArrayBuffer) {
+  if (imageData.byteLength === 0 || imageData.byteLength > 10 * 1024 * 1024) {
+    throw new Error('The motion photo must be smaller than 10 MB.')
+  }
+  const bytes = new Uint8Array(imageData)
+  if (bytes[0] !== 0xff || bytes[1] !== 0xd8) throw new Error('The motion snapshot is not a JPEG image.')
+  const token = await loadTelegramToken()
+  const form = new FormData()
+  form.set('chat_id', chatId)
+  form.set('caption', text)
+  form.set('photo', new Blob([bytes], { type: 'image/jpeg' }), 'motion.jpg')
+  const response = await fetch(`https://api.telegram.org/bot${token}/sendPhoto`, {
+    method: 'POST',
+    body: form,
+    signal: AbortSignal.timeout(20_000),
+  })
+  const result = await response.json() as { ok?: boolean; description?: string }
+  if (!response.ok || result.ok !== true) throw new Error(result.description || `Telegram photo upload failed (${response.status}).`)
+}
+
 function updatePowerBlocker(): boolean {
   if (powerRequests.size === 0) {
     if (powerBlockerId !== null) powerSaveBlocker.stop(powerBlockerId)
@@ -243,12 +263,14 @@ function registerIpc() {
     await sendTelegramText(settings.telegramChatId, 'Camera Recorder test notification. Telegram alerts are connected.')
     return true
   })
-  ipcMain.handle('telegram:send-motion-alert', async () => {
+  ipcMain.handle('telegram:send-motion-alert', async (_event, imageData?: ArrayBuffer) => {
     const settings = await readSettings()
     if (!settings.motionAlertsEnabled) throw new Error('Motion alerts are turned off.')
     if (!settings.telegramChatId) throw new Error('Connect Telegram in Settings to receive motion alerts.')
     const timestamp = new Date().toLocaleString()
-    await sendTelegramText(settings.telegramChatId, `Motion detected by Camera Recorder at ${timestamp}.`)
+    const message = `Motion detected by Camera Recorder at ${timestamp}.`
+    if (imageData) await sendTelegramPhoto(settings.telegramChatId, message, imageData)
+    else await sendTelegramText(settings.telegramChatId, message)
     return true
   })
   ipcMain.handle('telegram:disconnect', async () => {

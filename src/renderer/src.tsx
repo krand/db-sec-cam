@@ -10,6 +10,20 @@ declare global {
   }
 }
 
+async function captureMotionPhoto(video: HTMLVideoElement): Promise<ArrayBuffer | null> {
+  if (video.videoWidth === 0 || video.videoHeight === 0) return null
+  const scale = Math.min(1, 1280 / video.videoWidth, 1280 / video.videoHeight)
+  const canvas = document.createElement('canvas')
+  canvas.width = Math.max(1, Math.round(video.videoWidth * scale))
+  canvas.height = Math.max(1, Math.round(video.videoHeight * scale))
+  const context = canvas.getContext('2d')
+  if (!context) return null
+  context.drawImage(video, 0, 0, canvas.width, canvas.height)
+  const photo = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.82))
+  if (!photo || photo.size > 10 * 1024 * 1024) return null
+  return photo.arrayBuffer()
+}
+
 function App() {
   const [settings, setSettings] = useState<RecorderSettings | null>(null)
   const [stream, setStream] = useState<MediaStream | null>(null)
@@ -132,9 +146,12 @@ function App() {
         setMotionStatus('Change detected · connect Telegram to send alerts')
         return
       }
-      setMotionStatus('Change detected · sending Telegram alert…')
-      void window.cameraRecorder.sendMotionAlert()
-        .then(() => setMotionStatus(`Motion alert sent · ${changedPercent.toFixed(1)}% changed`))
+      setMotionStatus('Change detected · sending Telegram photo…')
+      void captureMotionPhoto(video)
+        .then((photo) => window.cameraRecorder.sendMotionAlert(photo ?? undefined).then(() => photo !== null))
+        .then((photoSent) => setMotionStatus(photoSent
+          ? `Motion photo sent · ${changedPercent.toFixed(1)}% changed`
+          : 'Motion alert sent; snapshot was unavailable.'))
         .catch((error) => setMotionStatus(error instanceof Error ? `Telegram alert failed · ${error.message}` : 'Telegram alert failed.'))
     }
 
@@ -552,7 +569,7 @@ function App() {
               <div className="field-group compact"><label htmlFor="motion-threshold">Changed area</label><div className="input-with-unit"><input id="motion-threshold" type="number" min="0.5" max="50" step="0.5" value={settings.motionSensitivityPercent} onChange={(event) => patchSettings({ motionSensitivityPercent: Number(event.target.value) || 0.5 })} /><span>%</span></div></div>
             </div>
             <div className="field-group compact cooldown-field"><label htmlFor="motion-cooldown">Alert cooldown</label><div className="input-with-unit"><input id="motion-cooldown" type="number" min="10" max="3600" step="10" value={settings.motionAlertCooldownSeconds} onChange={(event) => patchSettings({ motionAlertCooldownSeconds: Number(event.target.value) || 10 })} /><span>seconds</span></div></div>
-            <small className="motion-explainer">Frames are downscaled and compared locally. No AI is used; comparison images are kept in memory only and are not saved.</small>
+            <small className="motion-explainer">Frames are downscaled and compared locally without AI. Comparison images are not saved; a JPEG snapshot is sent to Telegram with each alert.</small>
             <div className="divider" />
             <div className="telegram-topline"><div><strong>Telegram notifications</strong><small>{settings.telegramChatId ? `Connected to @${settings.telegramBotUsername}` : 'Connect a private bot chat to receive alerts.'}</small></div><span className={`telegram-badge ${settings.telegramChatId ? 'connected' : ''}`}>{settings.telegramChatId ? 'CONNECTED' : 'OPTIONAL'}</span></div>
             {!settings.telegramChatId && <div className="telegram-token-row"><input type="password" autoComplete="off" aria-label="Telegram bot token" placeholder="Paste bot token from @BotFather" value={telegramTokenDraft} onChange={(event) => setTelegramTokenDraft(event.target.value)} /><button className="button button-outline" disabled={telegramBusy || !telegramTokenDraft.trim()} onClick={() => void saveTelegramToken()}>{telegramBusy ? 'Working…' : 'Save token'}</button></div>}

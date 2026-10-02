@@ -10,7 +10,7 @@ A local-first Electron app for live camera preview and segmented video recording
 - Approximate clip size shown from the selected target bitrate.
 - Choose any local destination folder, including a Dropbox-synced folder.
 - Optional total storage limit that removes the oldest Camera Recorder clips to stay under the configured size.
-- Optional motion alerts using local, non-AI frame comparison. Comparison frames stay in memory and are not saved.
+- Optional motion alerts using local, non-AI frame comparison, with a JPEG snapshot sent to Telegram when motion is detected.
 - Optional Telegram bot notifications; no app server is required.
 - Option to keep the display awake while recording or monitoring motion; otherwise the app prevents system idle sleep while allowing the display to sleep.
 - Camera permission is requested through macOS and recordings stay local unless the destination folder is synced by another service.
@@ -26,7 +26,7 @@ Telegram notifications use a bot chat to send alerts to your personal Telegram a
 5. Choose **Send test** to confirm the bot can message you.
 6. Turn on **Enable motion monitoring** and start the camera. Adjust the comparison interval, changed-area threshold, and alert cooldown to suit the scene.
 
-Motion monitoring runs only while the app is open and its camera preview is active. It compares downscaled grayscale frames locally; it does not use AI or save comparison images. When the configured portion of the image changes, the app sends a text alert. An internet connection and Telegram availability are required for delivery. Use **Disconnect** to remove the saved bot token and connection.
+Motion monitoring runs only while the app is open and its camera preview is active. It compares downscaled grayscale frames locally; it does not use AI or save comparison images. When the configured portion of the image changes, the app captures a JPEG snapshot (up to 1280 pixels on the longest side) and sends it with the alert. The snapshot is not saved on the Mac, but Telegram receives and retains it in the bot chat. An internet connection and Telegram availability are required for delivery. Use **Disconnect** to remove the saved bot token and connection.
 
 ## Development
 
