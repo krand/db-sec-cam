@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
+import QRCode from 'qrcode'
 import type { RecorderSettings, SavedClip, StorageStatus } from '../shared/settings'
 import { estimateClipSizeBytes, formatBytes, formatGigabytes } from '../shared/settings'
 import './styles.css'
@@ -39,6 +40,10 @@ function App() {
   const [telegramStatus, setTelegramStatus] = useState('')
   const [telegramBusy, setTelegramBusy] = useState(false)
   const [telegramNeedsStart, setTelegramNeedsStart] = useState(false)
+  const [telegramPairingLink, setTelegramPairingLink] = useState('')
+  const [telegramLinkCopied, setTelegramLinkCopied] = useState(false)
+  const [telegramPairingDialogOpen, setTelegramPairingDialogOpen] = useState(false)
+  const [telegramQrDataUrl, setTelegramQrDataUrl] = useState('')
   const [saveState, setSaveState] = useState('')
   const [savingSettings, setSavingSettings] = useState(false)
   const videoRef = useRef<HTMLVideoElement>(null)
@@ -55,6 +60,34 @@ function App() {
 
   useEffect(() => { settingsRef.current = settings }, [settings])
   useEffect(() => { streamRef.current = stream }, [stream])
+
+  useEffect(() => {
+    if (!telegramPairingDialogOpen || !telegramPairingLink) {
+      setTelegramQrDataUrl('')
+      return
+    }
+    let active = true
+    void QRCode.toDataURL(telegramPairingLink, {
+      errorCorrectionLevel: 'M',
+      margin: 2,
+      width: 240,
+      color: { dark: '#192335', light: '#ffffff' },
+    }).then((dataUrl) => {
+      if (active) setTelegramQrDataUrl(dataUrl)
+    }).catch(() => {
+      if (active) setTelegramQrDataUrl('')
+    })
+    return () => { active = false }
+  }, [telegramPairingDialogOpen, telegramPairingLink])
+
+  useEffect(() => {
+    if (!telegramPairingDialogOpen) return
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setTelegramPairingDialogOpen(false)
+    }
+    window.addEventListener('keydown', closeOnEscape)
+    return () => window.removeEventListener('keydown', closeOnEscape)
+  }, [telegramPairingDialogOpen])
 
   useEffect(() => window.cameraRecorder.onTelegramPhotoRequest((requestId) => {
     const video = videoRef.current
@@ -390,6 +423,9 @@ function App() {
       updateTelegramSettings({ telegramBotUsername: result.username, telegramChatId: '' })
       setTelegramTokenDraft('')
       setTelegramNeedsStart(true)
+      setTelegramPairingLink('')
+      setTelegramLinkCopied(false)
+      setTelegramPairingDialogOpen(false)
       setTelegramStatus(`Bot @${result.username} verified. Next, connect your Telegram chat.`)
     } catch (error) {
       setTelegramStatus(error instanceof Error ? error.message : 'Could not verify the bot token.')
@@ -399,15 +435,22 @@ function App() {
   }
 
   const beginTelegramConnect = async () => {
+    if (telegramPairingLink) {
+      setTelegramPairingDialogOpen(true)
+      return
+    }
     setTelegramBusy(true)
-    setTelegramStatus('Opening Telegram…')
+    setTelegramStatus('Preparing a secure pairing link…')
     try {
       const result = await window.cameraRecorder.beginTelegramConnect()
       updateTelegramSettings({ telegramBotUsername: result.username })
       setTelegramNeedsStart(true)
-      setTelegramStatus(`Start the chat with @${result.username}, then check the connection here.`)
+      setTelegramPairingLink(result.url)
+      setTelegramLinkCopied(false)
+      setTelegramPairingDialogOpen(true)
+      setTelegramStatus(`Pairing link ready for @${result.username}.`)
     } catch (error) {
-      setTelegramStatus(error instanceof Error ? error.message : 'Could not open Telegram.')
+      setTelegramStatus(error instanceof Error ? error.message : 'Could not create the Telegram pairing link.')
     } finally {
       setTelegramBusy(false)
     }
@@ -425,9 +468,19 @@ function App() {
       }
       updateTelegramSettings({ telegramChatId: result.chatId })
       setTelegramNeedsStart(false)
+      setTelegramPairingLink('')
+      setTelegramLinkCopied(false)
+      setTelegramPairingDialogOpen(false)
       setTelegramStatus(`Connected to @${settingsRef.current?.telegramBotUsername ?? 'your bot'}.`)
     } catch (error) {
-      setTelegramStatus(error instanceof Error ? error.message : 'Could not connect Telegram.')
+      const message = error instanceof Error ? error.message : 'Could not connect Telegram.'
+      setTelegramStatus(message)
+      if (message.toLowerCase().includes('expired')) {
+        setTelegramNeedsStart(false)
+        setTelegramPairingLink('')
+        setTelegramLinkCopied(false)
+        setTelegramPairingDialogOpen(false)
+      }
     } finally {
       setTelegramBusy(false)
     }
@@ -446,12 +499,35 @@ function App() {
     }
   }
 
+  const copyTelegramPairingLink = async () => {
+    try {
+      const copied = await window.cameraRecorder.copyText(telegramPairingLink)
+      setTelegramLinkCopied(copied)
+      if (!copied) setTelegramStatus('Could not copy the pairing link.')
+    } catch {
+      setTelegramLinkCopied(false)
+      setTelegramStatus('Could not copy the pairing link.')
+    }
+  }
+
+  const openTelegramPairingLink = async () => {
+    try {
+      await window.cameraRecorder.openTelegramPairingLink(telegramPairingLink)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Could not open the Telegram pairing link.'
+      setTelegramStatus(message)
+    }
+  }
+
   const disconnectTelegram = async () => {
     setTelegramBusy(true)
     try {
       await window.cameraRecorder.disconnectTelegram()
       updateTelegramSettings({ telegramChatId: '', telegramBotUsername: '', motionAlertsEnabled: false })
       setTelegramNeedsStart(false)
+      setTelegramPairingLink('')
+      setTelegramLinkCopied(false)
+      setTelegramPairingDialogOpen(false)
       setTelegramStatus('Telegram disconnected; the bot token was removed from this Mac.')
     } catch (error) {
       setTelegramStatus(error instanceof Error ? error.message : 'Could not disconnect Telegram.')
@@ -598,7 +674,7 @@ function App() {
             <div className="divider" />
             <div className="telegram-topline"><div><strong>Telegram notifications</strong><small>{settings.telegramChatId ? `Connected to @${settings.telegramBotUsername}` : 'Connect a private bot chat to receive alerts.'}</small></div><span className={`telegram-badge ${settings.telegramChatId ? 'connected' : ''}`}>{settings.telegramChatId ? 'CONNECTED' : 'OPTIONAL'}</span></div>
             {!settings.telegramChatId && <div className="telegram-token-row"><input type="password" autoComplete="off" aria-label="Telegram bot token" placeholder="Paste bot token from @BotFather" value={telegramTokenDraft} onChange={(event) => setTelegramTokenDraft(event.target.value)} /><button className="button button-outline" disabled={telegramBusy || !telegramTokenDraft.trim()} onClick={() => void saveTelegramToken()}>{telegramBusy ? 'Working…' : 'Save token'}</button></div>}
-            {settings.telegramBotUsername && !settings.telegramChatId && <div className="telegram-connect-actions"><button className="button button-outline" disabled={telegramBusy} onClick={() => void beginTelegramConnect()}>Open Telegram &amp; connect</button>{telegramNeedsStart && <button className="button button-outline" disabled={telegramBusy} onClick={() => void completeTelegramConnect()}>Check connection</button>}</div>}
+            {settings.telegramBotUsername && !settings.telegramChatId && <div className="telegram-connect-actions"><button className="button button-outline" disabled={telegramBusy} onClick={() => void beginTelegramConnect()}>Pair Telegram</button></div>}
             {settings.telegramChatId && <div className="telegram-connect-actions"><button className="button button-outline" disabled={telegramBusy} onClick={() => void testTelegram()}>Send test</button><button className="button button-outline danger-outline" disabled={telegramBusy} onClick={() => void disconnectTelegram()}>Disconnect</button></div>}
             {telegramStatus && <div className="telegram-message">{telegramStatus}</div>}
           </div>
@@ -606,6 +682,21 @@ function App() {
           <div className="privacy-note"><span className="privacy-lock">◇</span><span><strong>Private by default</strong><small>Video stays local unless its folder syncs online. Telegram receives motion alerts and pictures you request with /photo.</small></span></div>
         </aside>
       </div>
+
+      {telegramPairingDialogOpen && telegramPairingLink && <div className="pairing-dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setTelegramPairingDialogOpen(false) }}>
+        <section className="pairing-dialog" role="dialog" aria-modal="true" aria-labelledby="pairing-dialog-title">
+          <div className="pairing-dialog-header"><div><div className="eyebrow">TELEGRAM SETUP</div><h2 id="pairing-dialog-title">Pair Telegram</h2></div><button className="pairing-dialog-close" aria-label="Close pairing dialog" onClick={() => setTelegramPairingDialogOpen(false)}>×</button></div>
+          <p className="pairing-dialog-intro">Scan this QR code with your phone, or open the link below in a browser or Telegram. Press <strong>Start</strong> in the bot chat, then return here and check the connection.</p>
+          <div className="pairing-dialog-body">
+            <div className="pairing-qr-frame">{telegramQrDataUrl ? <img src={telegramQrDataUrl} alt="QR code for the one-time Telegram pairing link" /> : <span>Preparing QR code…</span>}</div>
+            <div className="pairing-dialog-steps"><strong>Pair with your phone</strong><ol><li>Scan the code with your phone camera.</li><li>Open the link in Telegram and press <strong>Start</strong>.</li><li>Return to this app and choose <strong>Check connection</strong>.</li></ol><small>The link expires in 5 minutes. Keep it private; anyone who uses it first can pair their chat.</small></div>
+          </div>
+          <label className="pairing-link-label" htmlFor="telegram-pairing-link">One-time pairing link</label>
+          <div className="pairing-link-row"><input id="telegram-pairing-link" readOnly value={telegramPairingLink} onFocus={(event) => event.currentTarget.select()} /><button className="button button-outline" onClick={() => void openTelegramPairingLink()}>Open link</button><button className="button button-outline" onClick={() => void copyTelegramPairingLink()}>{telegramLinkCopied ? 'Copied' : 'Copy'}</button></div>
+          {telegramStatus && <div className="pairing-dialog-status" role="status">{telegramStatus}</div>}
+          <div className="pairing-dialog-footer"><button className="button button-secondary" disabled={telegramBusy} onClick={() => void completeTelegramConnect()}>{telegramBusy ? 'Checking…' : 'Check connection'}</button></div>
+        </section>
+      </div>}
 
       <footer className="app-footer"><span className="footer-led" /> CAMERA PERMISSION IS CONTROLLED BY macOS <span className="footer-spacer" />{saveState && <span className="save-message">{saveState}</span>}</footer>
     </main>

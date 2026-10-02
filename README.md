@@ -1,6 +1,6 @@
 # Camera Recorder
 
-A local-first Electron app for live camera preview and segmented video recording.
+A local-first Electron app for live camera preview, segmented video recording, and motion detection with optional snapshot alerts.
 
 ## Features
 
@@ -22,7 +22,7 @@ Telegram notifications use a bot chat to send alerts to your personal Telegram a
 1. In Telegram, open [@BotFather](https://t.me/BotFather), send `/newbot`, and follow its prompts to create a dedicated bot.
 2. Copy the bot token that BotFather gives you. Keep it private; anyone with the token can control that bot.
 3. In Camera Recorder, open **Motion alerts**, paste the token, and choose **Save token**. The app verifies it and stores it using Electron's operating-system-backed secure storage.
-4. Choose **Open Telegram & connect**. In the Telegram chat that opens, press **Start**. Return to Camera Recorder and choose **Check connection**.
+4. Choose **Pair Telegram**. In the dialog, scan the QR code with your phone or open the pairing link in a browser or Telegram. Press **Start** in the bot chat, then return to Camera Recorder and choose **Check connection**. The one-time link expires after five minutes; keep it private.
 5. Choose **Send test** to confirm the bot can message you.
 6. Turn on **Enable motion monitoring** and start the camera. Adjust the comparison interval, changed-area threshold, and alert cooldown to suit the scene.
 

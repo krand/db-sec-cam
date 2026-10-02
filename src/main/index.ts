@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, powerSaveBlocker, safeStorage, session, shell, systemPreferences } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, ipcMain, powerSaveBlocker, safeStorage, session, shell, systemPreferences } from 'electron'
 import { randomBytes } from 'node:crypto'
 import { mkdir, readFile, readdir, stat, unlink, writeFile } from 'node:fs/promises'
 import path from 'node:path'
@@ -12,6 +12,7 @@ let powerBlockerKeepsDisplayAwake = false
 const powerRequests = new Map<string, boolean>()
 let storageQueue: Promise<void> = Promise.resolve()
 let activeTelegramChallenge: { value: string; expiresAt: number } | null = null
+let activeTelegramPairingUrl: string | null = null
 
 interface TelegramUpdate {
   update_id: number
@@ -299,6 +300,11 @@ function registerIpc() {
     pendingTelegramPhotos.get(requestId)?.(imageData instanceof ArrayBuffer ? imageData : undefined)
   })
   ipcMain.handle('settings:get', () => readSettings())
+  ipcMain.handle('clipboard:write', (event, value: unknown) => {
+    if (event.sender !== mainWindow?.webContents || typeof value !== 'string' || value.length > 4096) return false
+    clipboard.writeText(value)
+    return true
+  })
   ipcMain.handle('settings:save', (_event, settings: RecorderSettings) => withStorageLock(() => persistSettings(settings)))
   ipcMain.handle('storage:status', () => withStorageLock(async () => enforceStorageLimit(await readSettings())))
   ipcMain.handle('storage:enforce', () => withStorageLock(async () => enforceStorageLimit(await readSettings())))
@@ -308,6 +314,8 @@ function registerIpc() {
     const bot = await telegramRequest<{ username: string }>(token, 'getMe')
     if (!bot.username) throw new Error('Telegram did not return a bot username.')
     stopTelegramPolling()
+    activeTelegramChallenge = null
+    activeTelegramPairingUrl = null
     await storeTelegramToken(token)
     await withStorageLock(async () => {
       const current = await readSettings()
@@ -323,16 +331,25 @@ function registerIpc() {
     const payload = `cam_${nonce}`
     activeTelegramChallenge = { value: payload, expiresAt: Date.now() + 5 * 60_000 }
     const url = `https://t.me/${bot.username}?start=${payload}`
-    await shell.openExternal(url)
+    activeTelegramPairingUrl = url
     if (settings.telegramBotUsername !== bot.username) {
       await withStorageLock(async () => persistSettings({ ...await readSettings(), telegramBotUsername: bot.username }))
     }
-    return { username: bot.username }
+    return { username: bot.username, url }
+  })
+  ipcMain.handle('telegram:open-pairing-link', async (event, value: unknown) => {
+    if (event.sender !== mainWindow?.webContents || typeof value !== 'string' || value !== activeTelegramPairingUrl
+      || !activeTelegramChallenge || activeTelegramChallenge.expiresAt < Date.now()) {
+      throw new Error('The pairing link expired. Create a new one and try again.')
+    }
+    await shell.openExternal(value)
+    return true
   })
   ipcMain.handle('telegram:complete-connect', async () => {
     const challenge = activeTelegramChallenge
     if (!challenge || challenge.expiresAt < Date.now()) {
       activeTelegramChallenge = null
+      activeTelegramPairingUrl = null
       throw new Error('The connection link expired. Open Telegram to connect again.')
     }
     const token = await loadTelegramToken()
@@ -343,6 +360,7 @@ function registerIpc() {
     if (chatId === undefined) return { connected: false as const }
     const id = String(chatId)
     activeTelegramChallenge = null
+    activeTelegramPairingUrl = null
     await withStorageLock(async () => persistSettings({ ...await readSettings(), telegramChatId: id }))
     startTelegramPolling()
     return { connected: true as const, chatId: id }
@@ -369,6 +387,7 @@ function registerIpc() {
       if (error.code !== 'ENOENT') throw error
     })
     activeTelegramChallenge = null
+    activeTelegramPairingUrl = null
     await withStorageLock(async () => {
       const current = await readSettings()
       await persistSettings({ ...current, telegramBotUsername: '', telegramChatId: '', motionAlertsEnabled: false })
