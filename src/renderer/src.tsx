@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import type { RecorderSettings, SavedClip } from '../shared/settings'
-import { estimateClipSizeBytes, formatBytes } from '../shared/settings'
+import type { RecorderSettings, SavedClip, StorageStatus } from '../shared/settings'
+import { estimateClipSizeBytes, formatBytes, formatGigabytes } from '../shared/settings'
 import './styles.css'
 
 declare global {
@@ -18,6 +18,13 @@ function App() {
   const [recording, setRecording] = useState(false)
   const [elapsed, setElapsed] = useState(0)
   const [clips, setClips] = useState<SavedClip[]>([])
+  const [storageStatus, setStorageStatus] = useState<StorageStatus | null>(null)
+  const [storageLimitDraft, setStorageLimitDraft] = useState('2')
+  const [motionStatus, setMotionStatus] = useState('Motion monitoring is off.')
+  const [telegramTokenDraft, setTelegramTokenDraft] = useState('')
+  const [telegramStatus, setTelegramStatus] = useState('')
+  const [telegramBusy, setTelegramBusy] = useState(false)
+  const [telegramNeedsStart, setTelegramNeedsStart] = useState(false)
   const [saveState, setSaveState] = useState('')
   const [savingSettings, setSavingSettings] = useState(false)
   const videoRef = useRef<HTMLVideoElement>(null)
@@ -29,12 +36,22 @@ function App() {
   const settingsRef = useRef<RecorderSettings | null>(null)
   const activeSegmentsRef = useRef(0)
   const pendingSavesRef = useRef(0)
+  const previousMotionFrameRef = useRef<Uint8Array | null>(null)
+  const lastMotionAlertAtRef = useRef(0)
 
   useEffect(() => { settingsRef.current = settings }, [settings])
   useEffect(() => { streamRef.current = stream }, [stream])
 
   useEffect(() => {
-    void window.cameraRecorder.getSettings().then(setSettings)
+    void window.cameraRecorder.getSettings().then(async (loaded) => {
+      setSettings(loaded)
+      setStorageLimitDraft(String(loaded.storageLimitGB))
+      const status = await window.cameraRecorder.getStorageStatus()
+      setStorageStatus(status)
+      if (status.removedFiles.length > 0) {
+        setSaveState(`Removed ${status.removedFiles.length} oldest clip${status.removedFiles.length === 1 ? '' : 's'} to meet the storage limit.`)
+      }
+    })
   }, [])
 
   useEffect(() => {
@@ -51,6 +68,85 @@ function App() {
     return () => window.clearInterval(timer)
   }, [recording])
 
+  useEffect(() => {
+    if (!settings?.motionAlertsEnabled || !stream) {
+      previousMotionFrameRef.current = null
+      setMotionStatus(settings?.motionAlertsEnabled ? 'Start the camera to monitor for motion.' : 'Motion monitoring is off.')
+      return
+    }
+
+    const canvas = document.createElement('canvas')
+    canvas.width = 160
+    canvas.height = 90
+    const context = canvas.getContext('2d', { willReadFrequently: true })
+    const video = videoRef.current
+    if (!context || !video) return
+    let monitoring = true
+    void window.cameraRecorder.startMotionPowerBlocker(settings.keepDisplayAwake)
+      .then((started) => { if (monitoring && !started) setMotionStatus('Could not keep the Mac awake for motion monitoring.') })
+      .catch(() => { if (monitoring) setMotionStatus('Could not keep the Mac awake for motion monitoring.') })
+    previousMotionFrameRef.current = null
+    setMotionStatus('Watching for changes…')
+
+    const sample = () => {
+      if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return
+      context.filter = 'blur(1px)'
+      context.drawImage(video, 0, 0, canvas.width, canvas.height)
+      context.filter = 'none'
+      const rgba = context.getImageData(0, 0, canvas.width, canvas.height).data
+      const current = new Uint8Array(canvas.width * canvas.height)
+      let currentMean = 0
+      for (let i = 0; i < current.length; i += 1) {
+        const offset = i * 4
+        const gray = Math.round(rgba[offset] * 0.299 + rgba[offset + 1] * 0.587 + rgba[offset + 2] * 0.114)
+        current[i] = gray
+        currentMean += gray
+      }
+
+      const previous = previousMotionFrameRef.current
+      previousMotionFrameRef.current = current
+      if (!previous) {
+        setMotionStatus('Monitoring · establishing a baseline')
+        return
+      }
+      let previousMean = 0
+      for (let i = 0; i < previous.length; i += 1) previousMean += previous[i]
+      const meanShift = (currentMean - previousMean) / current.length
+      let changedPixels = 0
+      for (let i = 0; i < current.length; i += 1) {
+        if (Math.abs((current[i] - previous[i]) - meanShift) >= 26) changedPixels += 1
+      }
+      const changedPercent = (changedPixels / current.length) * 100
+      if (changedPercent < settings.motionSensitivityPercent) {
+        setMotionStatus(`Monitoring · ${changedPercent.toFixed(1)}% changed`)
+        return
+      }
+
+      const now = Date.now()
+      if (now - lastMotionAlertAtRef.current < settings.motionAlertCooldownSeconds * 1000) {
+        setMotionStatus(`Change detected · alert cooldown active`)
+        return
+      }
+      lastMotionAlertAtRef.current = now
+      if (!settings.telegramChatId) {
+        setMotionStatus('Change detected · connect Telegram to send alerts')
+        return
+      }
+      setMotionStatus('Change detected · sending Telegram alert…')
+      void window.cameraRecorder.sendMotionAlert()
+        .then(() => setMotionStatus(`Motion alert sent · ${changedPercent.toFixed(1)}% changed`))
+        .catch((error) => setMotionStatus(error instanceof Error ? `Telegram alert failed · ${error.message}` : 'Telegram alert failed.'))
+    }
+
+    const interval = window.setInterval(sample, settings.motionCheckIntervalSeconds * 1000)
+    return () => {
+      monitoring = false
+      window.clearInterval(interval)
+      previousMotionFrameRef.current = null
+      void window.cameraRecorder.stopMotionPowerBlocker()
+    }
+  }, [settings?.motionAlertsEnabled, settings?.motionCheckIntervalSeconds, settings?.motionSensitivityPercent, settings?.motionAlertCooldownSeconds, settings?.telegramChatId, settings?.keepDisplayAwake, stream])
+
   useEffect(() => () => {
     recordingRef.current = false
     if (rotateTimerRef.current !== null) window.clearTimeout(rotateTimerRef.current)
@@ -66,6 +162,7 @@ function App() {
       const saved = await window.cameraRecorder.saveSettings(next)
       setSettings(saved)
       settingsRef.current = saved
+      setStorageLimitDraft(String(saved.storageLimitGB))
       if (saved.resolution !== previous?.resolution || saved.frameRate !== previous?.frameRate) {
         const track = streamRef.current?.getVideoTracks()[0]
         if (track) {
@@ -73,6 +170,20 @@ function App() {
           const height = saved.resolution === '1080p' ? 1080 : 720
           await track.applyConstraints({ width: { ideal: width }, height: { ideal: height }, frameRate: { ideal: saved.frameRate } })
             .catch(() => setSaveState('Camera kept its supported resolution and frame rate.'))
+        }
+      }
+      const storagePolicyChanged = saved.storageLimitEnabled !== previous?.storageLimitEnabled
+        || saved.storageLimitGB !== previous?.storageLimitGB
+        || saved.outputDirectory !== previous?.outputDirectory
+      if (storagePolicyChanged) {
+        const status = saved.storageLimitEnabled
+          ? await window.cameraRecorder.enforceStorageLimit()
+          : await window.cameraRecorder.getStorageStatus()
+        setStorageStatus(status)
+        if (status.removedFiles.length > 0) {
+          const removed = new Set(status.removedFiles)
+          setClips((current) => current.filter((clip) => !removed.has(clip.name)))
+          setSaveState(`Removed ${status.removedFiles.length} oldest clip${status.removedFiles.length === 1 ? '' : 's'} to meet the storage limit.`)
         }
       }
     } finally {
@@ -114,7 +225,7 @@ function App() {
 
   const nextFileName = () => {
     const date = new Date()
-    const stamp = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}_${String(date.getHours()).padStart(2, '0')}-${String(date.getMinutes()).padStart(2, '0')}-${String(date.getSeconds()).padStart(2, '0')}`
+    const stamp = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}_${String(date.getHours()).padStart(2, '0')}-${String(date.getMinutes()).padStart(2, '0')}-${String(date.getSeconds()).padStart(2, '0')}-${String(date.getMilliseconds()).padStart(3, '0')}`
     return `clip_${stamp}_${String(activeSegmentsRef.current++).padStart(3, '0')}.webm`
   }
 
@@ -157,8 +268,17 @@ function App() {
         try {
           const data = await blob.arrayBuffer()
           const saved = await window.cameraRecorder.saveSegment(fileName, data)
-          setClips((previous) => [{ ...saved, durationSeconds, createdAt: new Date(stoppedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) }, ...previous].slice(0, 20))
-          setSaveState(`Saved ${saved.name} · ${formatBytes(saved.sizeBytes)}`)
+          setStorageStatus(saved.storage)
+          const removed = new Set(saved.storage.removedFiles)
+          setClips((previous) => {
+            const remaining = previous.filter((clip) => !removed.has(clip.name))
+            return saved.retained
+              ? [{ ...saved, durationSeconds, createdAt: new Date(stoppedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) }, ...remaining].slice(0, 20)
+              : remaining
+          })
+          if (!saved.retained) setSaveState('The clip was larger than the storage limit and was removed. Increase the limit or reduce clip length/bitrate.')
+          else if (saved.storage.removedFiles.length > 0) setSaveState(`Saved ${saved.name}; removed ${saved.storage.removedFiles.length} oldest clip${saved.storage.removedFiles.length === 1 ? '' : 's'} to stay within the limit.`)
+          else setSaveState(`Saved ${saved.name} · ${formatBytes(saved.sizeBytes)}`)
         } catch (error) {
           setSaveState(error instanceof Error ? `Could not save clip: ${error.message}` : 'Could not save clip. Check the destination folder.')
         } finally {
@@ -214,9 +334,110 @@ function App() {
     void persistSetting(next)
   }
 
+  const commitStorageLimit = () => {
+    if (!settings) return
+    const parsed = Number(storageLimitDraft)
+    if (!Number.isFinite(parsed)) {
+      setStorageLimitDraft(String(settings.storageLimitGB))
+      return
+    }
+    const value = Math.min(10_000, Math.max(0.1, parsed))
+    setStorageLimitDraft(String(value))
+    if (value !== settings.storageLimitGB) patchSettings({ storageLimitGB: value })
+  }
+
+  const updateTelegramSettings = (patch: Partial<RecorderSettings>) => {
+    const current = settingsRef.current
+    if (!current) return
+    const next = { ...current, ...patch }
+    settingsRef.current = next
+    setSettings(next)
+  }
+
+  const saveTelegramToken = async () => {
+    setTelegramBusy(true)
+    setTelegramStatus('Checking and securely saving the bot token…')
+    try {
+      const result = await window.cameraRecorder.saveTelegramToken(telegramTokenDraft)
+      updateTelegramSettings({ telegramBotUsername: result.username, telegramChatId: '' })
+      setTelegramTokenDraft('')
+      setTelegramNeedsStart(true)
+      setTelegramStatus(`Bot @${result.username} verified. Next, connect your Telegram chat.`)
+    } catch (error) {
+      setTelegramStatus(error instanceof Error ? error.message : 'Could not verify the bot token.')
+    } finally {
+      setTelegramBusy(false)
+    }
+  }
+
+  const beginTelegramConnect = async () => {
+    setTelegramBusy(true)
+    setTelegramStatus('Opening Telegram…')
+    try {
+      const result = await window.cameraRecorder.beginTelegramConnect()
+      updateTelegramSettings({ telegramBotUsername: result.username })
+      setTelegramNeedsStart(true)
+      setTelegramStatus(`Start the chat with @${result.username}, then check the connection here.`)
+    } catch (error) {
+      setTelegramStatus(error instanceof Error ? error.message : 'Could not open Telegram.')
+    } finally {
+      setTelegramBusy(false)
+    }
+  }
+
+  const completeTelegramConnect = async () => {
+    setTelegramBusy(true)
+    setTelegramStatus('Checking for the Telegram /start message…')
+    try {
+      const result = await window.cameraRecorder.completeTelegramConnect()
+      if (!result.connected) {
+        setTelegramNeedsStart(true)
+        setTelegramStatus('No connection message found yet. Press Start in Telegram, then try again.')
+        return
+      }
+      updateTelegramSettings({ telegramChatId: result.chatId })
+      setTelegramNeedsStart(false)
+      setTelegramStatus(`Connected to @${settingsRef.current?.telegramBotUsername ?? 'your bot'}.`)
+    } catch (error) {
+      setTelegramStatus(error instanceof Error ? error.message : 'Could not connect Telegram.')
+    } finally {
+      setTelegramBusy(false)
+    }
+  }
+
+  const testTelegram = async () => {
+    setTelegramBusy(true)
+    setTelegramStatus('Sending a test notification…')
+    try {
+      await window.cameraRecorder.testTelegram()
+      setTelegramStatus('Test notification sent. Check your Telegram chat.')
+    } catch (error) {
+      setTelegramStatus(error instanceof Error ? error.message : 'Could not send a test notification.')
+    } finally {
+      setTelegramBusy(false)
+    }
+  }
+
+  const disconnectTelegram = async () => {
+    setTelegramBusy(true)
+    try {
+      await window.cameraRecorder.disconnectTelegram()
+      updateTelegramSettings({ telegramChatId: '', telegramBotUsername: '', motionAlertsEnabled: false })
+      setTelegramNeedsStart(false)
+      setTelegramStatus('Telegram disconnected; the bot token was removed from this Mac.')
+    } catch (error) {
+      setTelegramStatus(error instanceof Error ? error.message : 'Could not disconnect Telegram.')
+    } finally {
+      setTelegramBusy(false)
+    }
+  }
+
   const estimate = useMemo(() => settings ? formatBytes(estimateClipSizeBytes(settings)) : '—', [settings])
   const progress = settings ? Math.min(100, (elapsed / settings.clipDurationSeconds) * 100) : 0
   const resolution = settings?.resolution ?? '720p'
+  const storageUsagePercent = storageStatus?.limitBytes
+    ? Math.min(100, (storageStatus.totalBytes / storageStatus.limitBytes) * 100)
+    : 0
 
   if (!settings) return <div className="loading-screen">Loading recorder…</div>
 
@@ -290,15 +511,57 @@ function App() {
               <small>Choose a Dropbox folder to sync clips online. Dropbox must be installed and signed in.</small>
             </div>
             <div className="divider" />
+            <div className="storage-section">
+              <label className="toggle-setting">
+                <span className="toggle-copy"><strong>Limit recorded clip storage</strong><small>Automatically remove the oldest clips when needed.</small></span>
+                <input type="checkbox" checked={settings.storageLimitEnabled} onChange={(event) => patchSettings({ storageLimitEnabled: event.target.checked })} />
+                <span className="toggle-track" />
+              </label>
+              <div className="storage-controls">
+                <div className="field-group compact">
+                  <label htmlFor="storage-limit">Maximum total size</label>
+                  <div className="input-with-unit"><input id="storage-limit" type="number" min="0.1" max="10000" step="0.1" value={storageLimitDraft} disabled={!settings.storageLimitEnabled} onChange={(event) => setStorageLimitDraft(event.target.value)} onBlur={commitStorageLimit} onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur() }} /><span>GB</span></div>
+                </div>
+                <div className="storage-usage">
+                  <div className="storage-usage-copy"><span>Current clips</span><strong>{storageStatus ? `${formatGigabytes(storageStatus.totalBytes)}${settings.storageLimitEnabled ? ` / ${settings.storageLimitGB} GB` : ''}` : 'Calculating…'}</strong></div>
+                  {settings.storageLimitEnabled && <div className="storage-meter"><span style={{ width: `${storageUsagePercent}%` }} /></div>}
+                  <small>{storageStatus?.clipCount ?? 0} recorded clips. Only Camera Recorder clips are managed.</small>
+                </div>
+              </div>
+              <small className="storage-help">When enabled, the app deletes its oldest recorded clips until the folder is within this limit. Other files are left alone.</small>
+            </div>
+            <div className="divider" />
             <label className="toggle-setting">
-              <span className="toggle-copy"><strong>Keep display awake</strong><small>Prevent the screen from sleeping while recording.</small></span>
+              <span className="toggle-copy"><strong>Keep display awake</strong><small>Prevent the screen from sleeping while recording or monitoring motion.</small></span>
               <input type="checkbox" checked={settings.keepDisplayAwake} onChange={(event) => patchSettings({ keepDisplayAwake: event.target.checked })} />
               <span className="toggle-track" />
             </label>
             <div className="save-indicator">{savingSettings ? 'Saving settings…' : 'Settings are saved automatically'}</div>
           </div>
 
-          <div className="privacy-note"><span className="privacy-lock">◇</span><span><strong>Private by default</strong><small>Clips are saved on this Mac. The app does not upload anything unless you choose a synced folder.</small></span></div>
+          <div className="settings-card motion-card">
+            <div className="card-heading"><div className="settings-icon motion-icon">⌁</div><div><div className="eyebrow">CLASSICAL IMAGE COMPARISON</div><h2>Motion alerts</h2></div></div>
+            <label className="toggle-setting">
+              <span className="toggle-copy"><strong>Enable motion monitoring</strong><small>Compare camera frames while the camera is on.</small></span>
+              <input type="checkbox" checked={settings.motionAlertsEnabled} onChange={(event) => patchSettings({ motionAlertsEnabled: event.target.checked })} />
+              <span className="toggle-track" />
+            </label>
+            <div className="motion-status"><span className={settings.motionAlertsEnabled && stream ? 'motion-status-dot active' : 'motion-status-dot'} />{motionStatus}</div>
+            <div className="field-row motion-fields">
+              <div className="field-group compact"><label htmlFor="motion-interval">Compare every</label><div className="input-with-unit"><input id="motion-interval" type="number" min="1" max="60" step="1" value={settings.motionCheckIntervalSeconds} onChange={(event) => patchSettings({ motionCheckIntervalSeconds: Number(event.target.value) || 1 })} /><span>sec</span></div></div>
+              <div className="field-group compact"><label htmlFor="motion-threshold">Changed area</label><div className="input-with-unit"><input id="motion-threshold" type="number" min="0.5" max="50" step="0.5" value={settings.motionSensitivityPercent} onChange={(event) => patchSettings({ motionSensitivityPercent: Number(event.target.value) || 0.5 })} /><span>%</span></div></div>
+            </div>
+            <div className="field-group compact cooldown-field"><label htmlFor="motion-cooldown">Alert cooldown</label><div className="input-with-unit"><input id="motion-cooldown" type="number" min="10" max="3600" step="10" value={settings.motionAlertCooldownSeconds} onChange={(event) => patchSettings({ motionAlertCooldownSeconds: Number(event.target.value) || 10 })} /><span>seconds</span></div></div>
+            <small className="motion-explainer">Frames are downscaled and compared locally. No AI is used; comparison images are kept in memory only and are not saved.</small>
+            <div className="divider" />
+            <div className="telegram-topline"><div><strong>Telegram notifications</strong><small>{settings.telegramChatId ? `Connected to @${settings.telegramBotUsername}` : 'Connect a private bot chat to receive alerts.'}</small></div><span className={`telegram-badge ${settings.telegramChatId ? 'connected' : ''}`}>{settings.telegramChatId ? 'CONNECTED' : 'OPTIONAL'}</span></div>
+            {!settings.telegramChatId && <div className="telegram-token-row"><input type="password" autoComplete="off" aria-label="Telegram bot token" placeholder="Paste bot token from @BotFather" value={telegramTokenDraft} onChange={(event) => setTelegramTokenDraft(event.target.value)} /><button className="button button-outline" disabled={telegramBusy || !telegramTokenDraft.trim()} onClick={() => void saveTelegramToken()}>{telegramBusy ? 'Working…' : 'Save token'}</button></div>}
+            {settings.telegramBotUsername && !settings.telegramChatId && <div className="telegram-connect-actions"><button className="button button-outline" disabled={telegramBusy} onClick={() => void beginTelegramConnect()}>Open Telegram &amp; connect</button>{telegramNeedsStart && <button className="button button-outline" disabled={telegramBusy} onClick={() => void completeTelegramConnect()}>Check connection</button>}</div>}
+            {settings.telegramChatId && <div className="telegram-connect-actions"><button className="button button-outline" disabled={telegramBusy} onClick={() => void testTelegram()}>Send test</button><button className="button button-outline danger-outline" disabled={telegramBusy} onClick={() => void disconnectTelegram()}>Disconnect</button></div>}
+            {telegramStatus && <div className="telegram-message">{telegramStatus}</div>}
+          </div>
+
+          <div className="privacy-note"><span className="privacy-lock">◇</span><span><strong>Private by default</strong><small>Video stays local unless its folder syncs online. If enabled, motion alerts send text to your Telegram bot.</small></span></div>
         </aside>
       </div>
 
