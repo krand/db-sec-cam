@@ -2,6 +2,8 @@
 
 A local-first Electron app for live camera preview, segmented video recording, and motion detection with optional snapshot alerts.
 
+![Camera Recorder screenshot](.github/assets/screenshot.png)
+
 ## Features
 
 - Live preview from the built-in or attached camera.
