@@ -45,6 +45,8 @@ function App() {
   const [telegramPairingDialogOpen, setTelegramPairingDialogOpen] = useState(false)
   const [telegramQrDataUrl, setTelegramQrDataUrl] = useState('')
   const [saveState, setSaveState] = useState('')
+  const [turningDisplayOff, setTurningDisplayOff] = useState(false)
+  const [displayActionError, setDisplayActionError] = useState('')
   const [savingSettings, setSavingSettings] = useState(false)
   const videoRef = useRef<HTMLVideoElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
@@ -395,6 +397,19 @@ function App() {
     void persistSetting(next)
   }
 
+  const turnOffDisplay = async () => {
+    if (!settings || settings.keepDisplayAwake || turningDisplayOff) return
+    setTurningDisplayOff(true)
+    setDisplayActionError('')
+    try {
+      await window.cameraRecorder.turnOffDisplay()
+    } catch (error) {
+      setDisplayActionError(error instanceof Error ? error.message : 'Could not turn off the display.')
+    } finally {
+      setTurningDisplayOff(false)
+    }
+  }
+
   const commitStorageLimit = () => {
     if (!settings) return
     const parsed = Number(storageLimitDraft)
@@ -656,6 +671,13 @@ function App() {
               <input type="checkbox" checked={settings.keepDisplayAwake} onChange={(event) => patchSettings({ keepDisplayAwake: event.target.checked })} />
               <span className="toggle-track" />
             </label>
+            <div className="display-control">
+              <button className="button button-secondary" onClick={() => void turnOffDisplay()} disabled={settings.keepDisplayAwake || turningDisplayOff}>
+                {turningDisplayOff ? 'Turning off…' : 'Turn off display'}
+              </button>
+              <small>{settings.keepDisplayAwake ? 'Turn off Keep display awake to use this button.' : 'Recording continues. Use the keyboard or mouse to wake the display.'}</small>
+            </div>
+            {displayActionError && <div className="inline-error display-error">{displayActionError}</div>}
             <div className="save-indicator">{savingSettings ? 'Saving settings…' : 'Settings are saved automatically'}</div>
           </div>
 

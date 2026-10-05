@@ -26,6 +26,7 @@ const cameraRecorder = {
   stopPowerBlocker: () => ipcRenderer.invoke('power:release', 'recording') as Promise<void>,
   startMotionPowerBlocker: (keepDisplayAwake: boolean) => ipcRenderer.invoke('power:acquire', 'motion', keepDisplayAwake) as Promise<boolean>,
   stopMotionPowerBlocker: () => ipcRenderer.invoke('power:release', 'motion') as Promise<void>,
+  turnOffDisplay: () => ipcRenderer.invoke('display:turn-off') as Promise<boolean>,
   requestCameraPermission: () => ipcRenderer.invoke('camera:request-permission') as Promise<boolean>,
   showFolder: (fullPath: string) => ipcRenderer.invoke('folder:show', fullPath) as Promise<void>,
 }

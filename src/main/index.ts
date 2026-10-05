@@ -1,4 +1,5 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, powerSaveBlocker, safeStorage, session, shell, systemPreferences } from 'electron'
+import { execFile } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { mkdir, readFile, readdir, stat, unlink, writeFile } from 'node:fs/promises'
 import path from 'node:path'
@@ -427,6 +428,19 @@ function registerIpc() {
   ipcMain.handle('power:release', (_event, reason: string) => {
     powerRequests.delete(reason)
     updatePowerBlocker()
+  })
+  ipcMain.handle('display:turn-off', async () => {
+    if (process.platform !== 'darwin') throw new Error('Turning off the display is supported only on macOS.')
+    if ([...powerRequests.values()].some(Boolean)) {
+      throw new Error('Turn off Keep display awake before turning off the display.')
+    }
+    await new Promise<void>((resolve, reject) => {
+      execFile('/usr/bin/pmset', ['displaysleepnow'], (error) => {
+        if (error) reject(new Error('Could not turn off the display.'))
+        else resolve()
+      })
+    })
+    return true
   })
   ipcMain.handle('camera:request-permission', async () => {
     if (process.platform !== 'darwin') return true

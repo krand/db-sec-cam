@@ -14,7 +14,7 @@ A local-first Electron app for live camera preview, segmented video recording, a
 - Optional total storage limit that removes the oldest Camera Recorder clips to stay under the configured size.
 - Optional motion alerts using local, non-AI frame comparison, with a JPEG snapshot sent to Telegram when motion is detected.
 - Optional Telegram bot notifications; no app server is required.
-- Option to keep the display awake while recording or monitoring motion; otherwise the app prevents system idle sleep while allowing the display to sleep.
+- Option to keep the display awake while recording or monitoring motion; otherwise the app prevents system idle sleep while allowing the display to sleep. On macOS, the display can also be turned off manually during recording and wakes on keyboard or mouse activity.
 - Camera permission is requested through macOS and recordings stay local unless the destination folder is synced by another service.
 
 ## Configure Telegram motion alerts
