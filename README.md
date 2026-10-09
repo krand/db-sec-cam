@@ -1,8 +1,36 @@
-# Camera Recorder
+# Camera Recorder — Turn your laptop into a security camera
 
-A local-first Electron app for live camera preview, segmented video recording, and motion detection with optional snapshot alerts.
+Use your MacBook or another Mac with a webcam as a security camera: preview the camera, record video locally, and receive Telegram snapshot alerts when motion is detected. Camera Recorder is a local-first Electron app with a macOS build and publicly available source code.
 
-![Camera Recorder screenshot](.github/assets/screenshot.png)
+Record to a local folder without a cloud account, or choose a Dropbox-synced folder to sync your clips. Optional Telegram alerts let you check on a room from your phone, and the `/photo` command returns a current camera picture while the app and camera are running.
+
+![Camera Recorder showing the laptop camera preview, recording settings, and Telegram motion alerts](.github/assets/screenshot.png)
+
+## How to use your laptop as a security camera
+
+### Install and launch on macOS
+
+You need a Mac with a working built-in or attached camera. To run from source, install Node.js and npm, then run:
+
+```sh
+git clone https://github.com/krand/db-sec-cam.git
+cd db-sec-cam
+npm install
+npm run dev
+```
+
+To create a DMG installer instead, follow the [macOS package instructions](#macos-package).
+
+### Set up recording
+
+1. Position the laptop so the camera has a clear view of the area you want to monitor, and connect it to power for longer sessions.
+2. Open Camera Recorder, choose **Start camera**, and allow camera access when macOS asks. If access was denied, enable it in **System Settings → Privacy & Security → Camera**.
+3. In **Recording settings**, choose **Choose folder** to set the destination for your video clips. Set the clip duration, resolution, frame rate, and target bitrate.
+4. Optionally enable **Limit recorded clip storage** and set a maximum total size. This deletes the oldest Camera Recorder clips when needed, including existing clips in the selected folder.
+5. Choose **Start recording**. Video is saved as separate WebM clips; choose **Stop recording** to finish and save the current clip.
+6. For notifications on your phone, [configure Telegram motion alerts](#configure-telegram-motion-alerts), enable motion monitoring, and walk through the scene to test detection.
+
+Recording and motion monitoring are independent: motion alerts do not start or stop video recording. Keep the app open and the camera running while monitoring.
 
 ## Features
 
@@ -34,9 +62,10 @@ While Camera Recorder is open and Telegram is connected, send `/photo` in the pr
 
 ## Development
 
+The app uses Electron, React, and TypeScript. Follow the source setup above to run it with `npm run dev`. To build the app without creating an installer:
+
 ```sh
-npm install
-npm run dev
+npm run build
 ```
 
 ## macOS package
